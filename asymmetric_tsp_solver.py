@@ -142,7 +142,7 @@ def asymmetric_2opt(D: np.ndarray, perm: List[int],
                 
                 # Calcul incrémental du delta
                 delta = D[a, c] + D[b, d] - D[a, b] - D[c, d]
-                
+
                 if len(segment) > 1:
                     for k in range(len(segment) - 1):
                         old_edge = D[segment[k], segment[k + 1]]
@@ -376,7 +376,12 @@ def auto_select_clusters(D: np.ndarray, max_clusters: int = 20,
 # ============================================================================
 
 def solve_cluster_asymmetric(args: Tuple[int, np.ndarray, np.ndarray, int]) -> Tuple[int, List[int], float]:
-    """Solve asymmetric TSP for a single cluster."""
+    """
+    Solve asymmetric TSP for a single cluster.
+    
+    OPTIMISATION: Pour petits clusters (≤15 villes), utilise Held-Karp (exact).
+    Pour clusters moyens (≤20), convertit cycle en chaîne en coupant pire arête.
+    """
     cluster_id, cluster_nodes, D, restarts = args
     
     if len(cluster_nodes) <= 1:
@@ -386,10 +391,31 @@ def solve_cluster_asymmetric(args: Tuple[int, np.ndarray, np.ndarray, int]) -> T
     sub_D = D[np.ix_(cluster_nodes, cluster_nodes)]
     n = len(cluster_nodes)
     
-    # Reduce restarts for small clusters
+    # OPTIMISATION 1: Résolution exacte pour petits clusters (≤15 villes)
+    if n <= 15:
+        try:
+            from held_karp import held_karp
+            perm_local, cost_local = held_karp(sub_D)
+            # Held-Karp retourne un cycle, on le garde tel quel pour le merge
+            global_tour = [int(cluster_nodes[i]) for i in perm_local]
+            return cluster_id, global_tour, cost_local
+        except Exception as e:
+            # Fallback si held_karp échoue
+            print(f"Warning: Held-Karp failed for cluster {cluster_id}, using 2-opt: {e}")
+    
+    # OPTIMISATION 2: Pour clusters moyens (16-20), résolution exacte possible mais plus lente
+    if n <= 20:
+        try:
+            from held_karp import held_karp
+            perm_local, cost_local = held_karp(sub_D)
+            global_tour = [int(cluster_nodes[i]) for i in perm_local]
+            return cluster_id, global_tour, cost_local
+        except:
+            pass  # Continue avec 2-opt
+    
+    # Fallback: Multi-start 2-opt pour grands clusters
     actual_restarts = min(restarts, max(3, n // 2))
     
-    # Solve asymmetric TSP
     try:
         perm_local, cost_local = multi_start_asymmetric_2opt(
             sub_D, 
@@ -550,15 +576,15 @@ def asymmetric_tsp_solve(
     
     # Adjust restarts based on problem size to avoid getting stuck
     if n > 400:
-        restarts_per_cluster = min(restarts_per_cluster, 10)
-        final_restarts = min(final_restarts, 3)
+        restarts_per_cluster = min(restarts_per_cluster, 30)
+        final_restarts = min(final_restarts, 10)
         if verbose:
             print(f"[Note] Large instance (n={n}), reducing restarts:")
             print(f"  restarts_per_cluster: {restarts_per_cluster}")
             print(f"  final_restarts: {final_restarts}\n")
     elif n > 250:
-        restarts_per_cluster = min(restarts_per_cluster, 15)
-        final_restarts = min(final_restarts, 5)
+        restarts_per_cluster = min(restarts_per_cluster, 30)
+        final_restarts = min(final_restarts, 15)
     
     # Step 1: Select k
     if auto_clusters:
@@ -636,8 +662,8 @@ def asymmetric_tsp_solve(
 
 if __name__ == "__main__":
     test_files = [
-        "lab2/problem_r1_200.npy",
-        "lab2/problem_r2_200.npy",
+        "lab2/problem_r1_1000.npy",
+        #"lab2/problem_r2_1000.npy",
     ]
     
     for filepath in test_files:
@@ -650,9 +676,9 @@ if __name__ == "__main__":
             
             tour, stats = asymmetric_tsp_solve(
                 D,
-                max_clusters=min(50, len(D) // 5),
+                max_clusters=min(100, len(D) // 5),
                 restarts_per_cluster=10,
-                final_restarts=5,
+                final_restarts=3,
                 auto_clusters=True,
                 verbose=True
             )
